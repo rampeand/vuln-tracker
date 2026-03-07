@@ -135,7 +135,47 @@ Create a `.env.local` file in the project root:
 VITE_API_URL=http://localhost:8000
 ```
 
+### Running with Docker
+
+You can easily run the application using the pre-built Docker images hosted on Docker Hub.
+
+#### Using Docker Compose
+Create a `docker-compose.yml` file:
+```yaml
+version: '3.8'
+services:
+  backend:
+    image: rampeand/vuln-tracker:backend
+    ports:
+      - "8000:8000"
+    restart: always
+
+  frontend:
+    image: rampeand/vuln-tracker:frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: always
+```
+Run the application:
+```bash
+docker compose up -d
+```
+The dashboard will be available at `http://localhost:3000` and the API at `http://localhost:8000`.
+
+#### Using Docker CLI (Manual)
+Run the backend:
+```bash
+docker run -d --name vuln-tracker-backend -p 8000:8000 rampeand/vuln-tracker:backend
+```
+Run the frontend:
+```bash
+docker run -d --name vuln-tracker-frontend -p 3000:80 rampeand/vuln-tracker:frontend
+```
+
 ---
+
 
 ## API Reference
 
