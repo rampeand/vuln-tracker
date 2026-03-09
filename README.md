@@ -292,9 +292,6 @@ vuln-tracker/
 
 ---
 
-## License
-
-MIT
 
 ---
 
