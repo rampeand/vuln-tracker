@@ -4,7 +4,7 @@ import StatsPanel from './components/StatsPanel'
 import FilterBar from './components/FilterBar'
 import LoadingSpinner from './components/LoadingSpinner'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL = import.meta.env.PROD ? '' : (import.meta.env.VITE_API_URL || 'http://localhost:8000')
 
 function App() {
   const [vulnerabilities, setVulnerabilities] = useState([])
