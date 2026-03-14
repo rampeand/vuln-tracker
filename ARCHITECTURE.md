@@ -1,8 +1,8 @@
-# Vulnerability Tracker — Architecture
+# Vulnerability Tracker &mdash; Architecture
 
 ## Overview
 
-Vulnerability Tracker is a real-time security intelligence dashboard that aggregates CVE/advisory data from three authoritative public sources: the National Vulnerability Database (NVD), GitHub Security Advisories, and CISA's Known Exploited Vulnerabilities (KEV) catalog. It stores data in a local SQLite database that is refreshed hourly via a background scheduler, with on-demand refresh also available from the UI.
+Vulnerability Tracker is a containerised, two-service application that aggregates CVE and advisory data from three public sources (NVD, GitHub Security Advisories, CISA KEV), stores it in a local SQLite database refreshed hourly, and serves it through a React single-page dashboard behind an Nginx reverse proxy.
 
 ---
 
@@ -101,43 +101,43 @@ sequenceDiagram
 
 ```
 src/
-├── App.jsx               # Root component — state management, data fetching, layout
-├── main.jsx              # React entry point (ReactDOM.createRoot)
+├── App.jsx               # Root: state management, data fetching, layout
+├── main.jsx              # React entry point (createRoot)
 ├── index.css             # Tailwind CSS directives + global resets
 └── components/
     ├── FilterBar.jsx     # Time-range / severity / source / text-search controls
-    ├── StatsPanel.jsx    # Summary cards (total, CRITICAL/HIGH/MEDIUM/LOW counts)
-    ├── SourceStatus.jsx  # Per-source last-update timestamps + refresh buttons
-    ├── VulnerabilityCard.jsx  # Expandable card for a single CVE/advisory
+    ├── StatsPanel.jsx    # Summary cards (total + per-severity counts)
+    ├── SourceStatus.jsx  # Per-source timestamps, status, refresh buttons
+    ├── VulnerabilityCard.jsx  # Expandable card for one CVE / advisory
     └── LoadingSpinner.jsx     # Async loading indicator
 ```
 
 | Component | Responsibility |
 |-----------|---------------|
-| `App.jsx` | Owns all state; fetches `/api/vulnerabilities`, `/api/stats`, `/api/sources/status`; wires up refresh callbacks |
+| `App.jsx` | Owns all state; fetches `/api/vulnerabilities`, `/api/stats`, `/api/sources/status`; wires refresh callbacks |
 | `FilterBar.jsx` | Emits filter changes that trigger re-fetches in `App` |
-| `StatsPanel.jsx` | Displays aggregate counts; pure display component |
-| `SourceStatus.jsx` | Shows health/timestamp per source; calls `POST /api/sources/refresh` per button click |
-| `VulnerabilityCard.jsx` | Renders one vulnerability; expands on click to show full details, CWE links, references |
+| `StatsPanel.jsx` | Displays aggregate counts; pure presentational component |
+| `SourceStatus.jsx` | Shows health / timestamp per source; calls `POST /api/sources/refresh` on button click |
+| `VulnerabilityCard.jsx` | Renders one vulnerability; expands to show full details, CWE links, references |
 
 ### Backend (`backend/`)
 
 ```
 backend/
-├── main.py           # FastAPI app, data-fetch functions, DB layer, scheduler
-├── requirements.txt  # Python dependencies
-├── Dockerfile        # Python 3.11-slim image
-└── vulnerabilities.db  # SQLite database (auto-created at startup, gitignored)
+├── main.py              # FastAPI app, data-fetch functions, DB layer, scheduler
+├── requirements.txt     # Python dependencies
+├── Dockerfile           # Python 3.11-slim image
+└── vulnerabilities.db   # SQLite database (auto-created at startup, gitignored)
 ```
 
 | Layer | Implementation | Purpose |
 |-------|---------------|---------|
-| HTTP Server | Uvicorn (ASGI) | Serves FastAPI application |
-| API Framework | FastAPI + Pydantic | Request routing, validation, OpenAPI docs |
+| HTTP Server | Uvicorn (ASGI) | Serves the FastAPI application |
+| API Framework | FastAPI + Pydantic | Request routing, validation, auto-generated OpenAPI docs |
 | Scheduler | APScheduler `AsyncIOScheduler` | Hourly `refresh_all_sources()` background job |
 | Cache | `cachetools.TTLCache` | 15-minute in-memory cache keyed by `days` param |
 | Persistence | SQLite via `aiosqlite` | Stores all vulnerability + source status data |
-| HTTP Client | `httpx.AsyncClient` | Async fetches from external APIs |
+| HTTP Client | `httpx.AsyncClient` | Concurrent async fetches from external APIs |
 
 ---
 
@@ -149,7 +149,7 @@ erDiagram
         TEXT id PK "CVE-YYYY-NNNNN or GHSA-xxxx"
         TEXT title
         TEXT description
-        TEXT severity "CRITICAL/HIGH/MEDIUM/LOW/UNKNOWN"
+        TEXT severity "CRITICAL / HIGH / MEDIUM / LOW / UNKNOWN"
         REAL cvss_score "nullable"
         TEXT published_date "ISO 8601"
         TEXT source "NVD / GitHub Advisory / CISA KEV"
@@ -157,7 +157,7 @@ erDiagram
         TEXT affected_products "JSON array"
         TEXT remediation
         TEXT cwe_ids "JSON array"
-        TEXT references "JSON array"
+        TEXT ref_urls "JSON array of reference URLs"
         TEXT last_seen "ISO 8601 — when last refreshed"
     }
 
@@ -170,36 +170,38 @@ erDiagram
     }
 ```
 
+> **Note:** The database column is named `ref_urls` (not `references`) because `REFERENCES` is a reserved SQL keyword in SQLite. The Pydantic model and JSON API response still use the field name `references`.
+
 ---
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/vulnerabilities` | Filtered, sorted vulnerability list (from DB + cache) |
-| `GET` | `/api/stats` | Severity and source counts for current filter |
+| `GET` | `/api/vulnerabilities` | Filtered, sorted vulnerability list (from cache or DB) |
+| `GET` | `/api/stats` | Severity and source counts for the current look-back window |
 | `GET` | `/api/sources/status` | Per-source last-update timestamp, status, record count, next scheduled refresh |
 | `POST` | `/api/sources/refresh` | Trigger immediate on-demand refresh (body: `{"source": "NVD"}` or `{}` for all) |
-| `GET` | `/health` | Liveness probe (`{"status":"healthy"}`) |
+| `GET` | `/health` | Liveness probe (`{"status": "healthy"}`) |
 
 Query parameters for `/api/vulnerabilities`:
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `days` | int 1–30 | `2` | Look-back window |
-| `severity` | string | — | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` |
-| `source` | string | — | `NVD`, `GitHub`, `CISA` (substring match) |
-| `search` | string | — | Free-text search in id/title/description |
+| `days` | int (1 &ndash; 30) | `2` | Look-back window |
+| `severity` | string | &mdash; | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` |
+| `source` | string | &mdash; | `NVD`, `GitHub`, `CISA` (substring match) |
+| `search` | string | &mdash; | Free-text search in ID, title, description |
 
 ---
 
 ## Data Sources
 
-| Source | Endpoint | Data | Severity | Rate Limit |
-|--------|----------|------|----------|------------|
-| **NVD** | `services.nvd.nist.gov/rest/json/cves/2.0` | CVE ID, CVSS, CWE, CPE products, references | Calculated from CVSS score | 5 req/30s (no key) |
-| **GitHub Advisories** | `api.github.com/advisories` | GHSA/CVE ID, package ecosystem, CVSS | Mapped from CRITICAL/HIGH/MODERATE/LOW | 60 req/hr (no key) |
-| **CISA KEV** | `cisa.gov/…/known_exploited_vulnerabilities.json` | CVE ID, vendor/product, required action, due date | Always CRITICAL | No limit (static JSON) |
+| Source | Endpoint | Data Provided | Rate Limit |
+|--------|----------|--------------|------------|
+| **NVD** | `services.nvd.nist.gov/rest/json/cves/2.0` | CVE ID, CVSS (v3.1 &rarr; v3.0 &rarr; v2.0), CWE, CPE products, references | 5 req / 30 sec (no API key) |
+| **GitHub Advisories** | `api.github.com/advisories` | GHSA/CVE ID, package ecosystem, CVSS, severity | 60 req / hr (unauthenticated) |
+| **CISA KEV** | `cisa.gov/.../known_exploited_vulnerabilities.json` | CVE ID, vendor/product, required action, due date (always CRITICAL) | No limit (static JSON) |
 
 ---
 
@@ -207,25 +209,40 @@ Query parameters for `/api/vulnerabilities`:
 
 ```mermaid
 graph LR
-    subgraph Local["docker compose up"]
-        FE["frontend:3000\nNginx + React"]
-        BE["backend:8000\nUvicorn + FastAPI"]
-        FE -->|"internal network\napi proxy"| BE
-    end
-
-    subgraph CICD["GitHub Actions (.github/workflows/docker-publish.yml)"]
+    subgraph CI["GitHub Actions"]
         direction TB
-        BUILD["Build & test both containers"]
+        BUILD["Build & test\nboth containers"]
         PUSH["Push to Docker Hub\nrampeand/vuln-tracker:backend\nrampeand/vuln-tracker:frontend"]
         BUILD --> PUSH
     end
+
+    subgraph Prod["Production  (docker-compose.prod.yml)"]
+        FE2["frontend:80\nNginx + React static"]
+        BE2["backend:8000\nUvicorn + FastAPI + SQLite"]
+        VOL[("db-data volume\nvulnerabilities.db")]
+        FE2 -->|"app-network\nproxy_pass /api/"| BE2
+        BE2 --- VOL
+    end
+
+    PUSH -->|"docker pull"| Prod
 ```
+
+### Container Details
+
+| Container | Base Image | Exposed Port | Key Responsibilities |
+|-----------|-----------|-------------|---------------------|
+| **frontend** | `nginx:stable-alpine` | 80 | Serve static React build; reverse-proxy `/api/*` and `/health` to backend |
+| **backend** | `python:3.11-slim` | 8000 | FastAPI server, APScheduler, SQLite persistence, external API fetching |
+
+### Nginx Proxy
+
+The frontend container's `nginx.conf` uses Docker's embedded DNS resolver (`127.0.0.11`) with a variable-based `proxy_pass` so the backend hostname is re-resolved on each request. This avoids stale-DNS 502 errors when the backend container restarts.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VITE_API_URL` | `http://localhost:8000` | Backend URL (dev only; prod uses Nginx proxy) |
+| `VITE_API_URL` | `http://localhost:8000` | Backend URL (dev only; production uses the Nginx proxy) |
 | `DB_PATH` | `vulnerabilities.db` | SQLite database file path (backend) |
 
 ---
@@ -234,15 +251,15 @@ graph LR
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
-| Frontend framework | React | 19.2.0 |
-| Build tool | Vite | 7.3.1 |
-| CSS | Tailwind CSS | 4.2.1 |
-| Backend framework | FastAPI | 0.115.0 |
-| ASGI server | Uvicorn | 0.30.6 |
-| Scheduler | APScheduler | 3.10.4 |
-| Database | SQLite (aiosqlite) | stdlib + 0.20.0 |
-| HTTP client | HTTPX | 0.27.2 |
-| Data validation | Pydantic | 2.9.2 |
+| Frontend framework | React | 19.2 |
+| Build tool | Vite | 7.3 |
+| CSS framework | Tailwind CSS | 4.2 |
+| Backend framework | FastAPI | 0.115 |
+| ASGI server | Uvicorn | 0.30 |
+| Scheduler | APScheduler | 3.10 |
+| Database | SQLite (aiosqlite) | stdlib + 0.20 |
+| HTTP client | HTTPX | 0.27 |
+| Data validation | Pydantic | 2.9 |
 | Reverse proxy | Nginx | stable-alpine |
-| Containerisation | Docker + Compose | — |
-| CI/CD | GitHub Actions | — |
+| Containerisation | Docker + Compose | &mdash; |
+| CI/CD | GitHub Actions | &mdash; |
