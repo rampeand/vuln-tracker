@@ -165,7 +165,7 @@ async def init_db():
                 affected_products TEXT,   -- JSON-encoded list[str]
                 remediation       TEXT,
                 cwe_ids           TEXT,   -- JSON-encoded list[str]
-                references        TEXT,   -- JSON-encoded list[str]
+                ref_urls          TEXT,   -- JSON-encoded list[str]
                 last_seen         TEXT    -- ISO 8601 of last refresh that included this row
             )
         """)
@@ -243,7 +243,7 @@ async def _upsert_vulnerabilities(vulns: list[Vulnerability]):
             """INSERT OR REPLACE INTO vulnerabilities
                (id, title, description, severity, cvss_score, published_date,
                 source, source_url, affected_products, remediation,
-                cwe_ids, references, last_seen)
+                cwe_ids, ref_urls, last_seen)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [_vuln_to_row(v) for v in vulns]
         )
@@ -319,7 +319,7 @@ async def _read_vulnerabilities_from_db(days: int) -> list[Vulnerability]:
             async with db.execute(
                 """SELECT id, title, description, severity, cvss_score,
                           published_date, source, source_url,
-                          affected_products, remediation, cwe_ids, references
+                          affected_products, remediation, cwe_ids, ref_urls
                    FROM vulnerabilities
                    WHERE published_date >= ?
                    ORDER BY cvss_score DESC, published_date DESC""",

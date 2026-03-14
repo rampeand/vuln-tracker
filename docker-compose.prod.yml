@@ -1,0 +1,43 @@
+version: '3.8'
+
+# Production deployment — pulls pre-built images from Docker Hub.
+# Usage:
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Both services are placed on the shared "app-network" so the frontend
+# nginx container can reach the backend via the "backend" hostname that
+# is baked into nginx.conf.
+
+services:
+  backend:
+    image: rampeand/vuln-tracker:backend
+    volumes:
+      - db-data:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: always
+    networks:
+      - app-network
+
+  frontend:
+    image: rampeand/vuln-tracker:frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: always
+    networks:
+      - app-network
+
+volumes:
+  db-data:
+
+networks:
+  app-network:
+    driver: bridge
