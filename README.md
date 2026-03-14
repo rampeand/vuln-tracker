@@ -129,50 +129,35 @@ The dashboard will be available at `http://localhost:5173`
 
 ### Environment Variables
 
-Create a `.env.local` file in the project root:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VITE_API_URL` | `http://localhost:8000` | Backend URL (dev mode only; production uses Nginx proxy) |
+| `DB_PATH` | `vulnerabilities.db` | SQLite database file path (backend) |
 
-```env
-VITE_API_URL=http://localhost:8000
-```
+### Docker (Recommended)
 
-### Running with Docker
+Pre-built images are published to Docker Hub on every push to `main`.
 
-You can easily run the application using the pre-built Docker images hosted on Docker Hub.
+#### Production Deployment
 
-#### Using Docker Compose
-Create a `docker-compose.yml` file:
-```yaml
-version: '3.8'
-services:
-  backend:
-    image: rampeand/vuln-tracker:backend
-    ports:
-      - "8000:8000"
-    restart: always
+A ready-to-use production compose file is included in the repository:
 
-  frontend:
-    image: rampeand/vuln-tracker:frontend
-    ports:
-      - "3000:80"
-    depends_on:
-      - backend
-    restart: always
-```
-Run the application:
 ```bash
-docker compose up -d
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 ```
-The dashboard will be available at `http://localhost:3000` and the API at `http://localhost:8000`.
 
-#### Using Docker CLI (Manual)
-Run the backend:
+This starts both services on a shared Docker network so the frontend Nginx proxy can reach the backend, and persists the SQLite database in a named volume.
+
+The dashboard will be available at `http://localhost:3000`.
+
+#### Local Development (build from source)
+
 ```bash
-docker run -d --name vuln-tracker-backend -p 8000:8000 rampeand/vuln-tracker:backend
+docker compose up -d --build
 ```
-Run the frontend:
-```bash
-docker run -d --name vuln-tracker-frontend -p 3000:80 rampeand/vuln-tracker:frontend
-```
+
+This builds both images locally and exposes the dashboard at `http://localhost:3000` and the API at `http://localhost:8000`.
 
 ---
 
@@ -255,17 +240,23 @@ GET /health
 ```
 vuln-tracker/
 ├── backend/
-│   ├── main.py              # FastAPI application
+│   ├── main.py              # FastAPI application (API + data fetchers + scheduler)
+│   ├── Dockerfile           # Python 3.11-slim container
 │   └── requirements.txt     # Python dependencies
 ├── src/
-│   ├── App.jsx              # Main React component
+│   ├── App.jsx              # Main React component (state + data fetching)
 │   ├── components/
 │   │   ├── FilterBar.jsx    # Search and filter controls
 │   │   ├── LoadingSpinner.jsx
+│   │   ├── SourceStatus.jsx # Data source health & refresh controls
 │   │   ├── StatsPanel.jsx   # Severity statistics
 │   │   └── VulnerabilityCard.jsx
 │   ├── index.css            # Tailwind imports
 │   └── main.jsx             # React entry point
+├── nginx.conf               # Reverse proxy: static files + /api/ → backend
+├── Dockerfile               # Multi-stage build: Node build → Nginx runtime
+├── docker-compose.yml       # Local development (build from source)
+├── docker-compose.prod.yml  # Production deployment (Docker Hub images)
 ├── package.json
 └── vite.config.js
 ```
@@ -275,9 +266,11 @@ vuln-tracker/
 | Layer | Technology |
 |-------|------------|
 | **Frontend** | React 19, Vite 7, Tailwind CSS 4 |
-| **Backend** | FastAPI, Pydantic, HTTPX |
-| **Caching** | cachetools (TTL-based) |
-| **Data Sources** | NVD API 2.0, GitHub API, CISA KEV |
+| **Backend** | FastAPI, Pydantic, HTTPX, APScheduler |
+| **Database** | SQLite (aiosqlite) with 15-min TTL cache |
+| **Proxy** | Nginx (static files + API reverse proxy) |
+| **Data Sources** | NVD API 2.0, GitHub Advisory API, CISA KEV |
+| **CI/CD** | GitHub Actions → Docker Hub |
 
 ---
 
