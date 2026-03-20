@@ -11,7 +11,7 @@ function FilterBar({
 }) {
   const daysOptions = [1, 2, 3, 7, 14, 30]
   const severityOptions = ['', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
-  const sourceOptions = ['', 'NVD', 'GitHub', 'CISA']
+  const sourceOptions = ['', 'NVD', 'GitHub', 'CISA', 'CCCS']
 
   return (
     <div className="bg-gray-800 rounded-lg p-4 mb-6 border border-gray-700">

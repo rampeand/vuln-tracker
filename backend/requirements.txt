@@ -6,3 +6,4 @@ pydantic==2.9.2
 cachetools==5.5.0
 aiosqlite==0.20.0
 apscheduler==3.10.4
+defusedxml==0.7.1

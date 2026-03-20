@@ -1,17 +1,18 @@
 """
 Vulnerability Aggregator API
 =============================
-A FastAPI backend that aggregates security vulnerability data from three
+A FastAPI backend that aggregates security vulnerability data from four
 authoritative public sources and persists it to a local SQLite database.
 
 Data Sources:
-  - NVD  (National Vulnerability Database) — NIST CVE feed
-  - GitHub Security Advisories             — ecosystem package advisories
-  - CISA KEV (Known Exploited Vulnerabilities) — actively exploited CVEs
+  - NVD  (National Vulnerability Database)         — NIST CVE feed
+  - GitHub Security Advisories                     — ecosystem package advisories
+  - CISA KEV (Known Exploited Vulnerabilities)     — actively exploited CVEs
+  - CCCS (Canadian Centre for Cyber Security)      — alerts & advisories (Atom feed)
 
 Architecture:
   - SQLite database  : persistent storage, survives container restarts
-  - APScheduler      : hourly background job refreshes all three sources
+  - APScheduler      : hourly background job refreshes all four sources
   - TTL Cache        : 15-minute in-memory cache reduces DB reads
   - FastAPI / Pydantic: typed REST API with auto-generated OpenAPI docs
 
@@ -28,7 +29,7 @@ Data Flow (read path):
                                          SQLite DB → Response
 
 Data Flow (write path / background):
-  APScheduler (every hour) → fetch NVD + GitHub + CISA (concurrent)
+  APScheduler (every hour) → fetch NVD + GitHub + CISA + CCCS (concurrent)
                            → INSERT OR REPLACE into SQLite
                            → UPDATE source_status timestamps
                            → invalidate TTL cache
@@ -46,6 +47,10 @@ import asyncio
 import aiosqlite
 import json
 import os
+import re
+import html as html_mod
+
+from defusedxml import ElementTree as ET
 
 from dateutil import parser as date_parser
 from cachetools import TTLCache
@@ -65,7 +70,7 @@ DB_PATH = os.environ.get("DB_PATH", "vulnerabilities.db")
 REFRESH_DAYS = 30
 
 # Canonical list of data source names used throughout the application
-SOURCE_NAMES = ["NVD", "GitHub Advisory", "CISA KEV"]
+SOURCE_NAMES = ["NVD", "GitHub Advisory", "CISA KEV", "CCCS"]
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +95,7 @@ _refresh_lock = asyncio.Lock()
 # ---------------------------------------------------------------------------
 
 class Vulnerability(BaseModel):
-    """A single vulnerability record aggregated from one of the three sources."""
+    """A single vulnerability record aggregated from one of the four sources."""
     id: str                             # CVE-YYYY-NNNNN or GHSA-xxxx-xxxx-xxxx
     title: str                          # Human-readable title or advisory summary
     description: str                    # Vulnerability description (max 500 chars)
@@ -743,6 +748,142 @@ async def fetch_cisa_kev(days: int, client: httpx.AsyncClient) -> list[Vulnerabi
     return vulnerabilities
 
 
+async def fetch_cccs_alerts(days: int, client: httpx.AsyncClient) -> list[Vulnerability]:
+    """
+    Fetch alerts and advisories from the Canadian Centre for Cyber Security (CCCS).
+
+    The CCCS publishes an Atom (RFC 4287) feed of security alerts and advisories
+    at https://www.cyber.gc.ca/api/cccs/rss/v1/get?feed=alerts_advisories&lang=en.
+
+    Each entry contains an HTML article body but no structured CVSS, CWE, or
+    affected-product fields.  We extract what we can:
+      - CVE IDs from the title (regex)
+      - Severity hint from the title ("Critical", "High", etc.)
+      - Affected products parsed from the title (text after "impacting")
+      - Reference URLs extracted from <a href="..."> in the HTML content
+      - Plain-text description stripped from the HTML body
+
+    Entries are filtered client-side by their <updated> timestamp to respect
+    the `days` window.
+
+    Raises exception on fetch failure so the caller records the error.
+    """
+    vulnerabilities: list[Vulnerability] = []
+
+    url = "https://www.cyber.gc.ca/api/cccs/rss/v1/get?feed=alerts_advisories&lang=en"
+    response = await client.get(url, timeout=30.0, follow_redirects=True)
+
+    if response.status_code != 200:
+        raise Exception(f"CCCS feed returned HTTP {response.status_code}")
+
+    # Parse the Atom XML feed using defusedxml for safe processing
+    root = ET.fromstring(response.content)
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days)
+
+    for entry in root.findall("atom:entry", ns):
+        # Extract the <updated> timestamp and filter by date window
+        updated_el = entry.find("atom:updated", ns)
+        if updated_el is None or not updated_el.text:
+            continue
+        try:
+            entry_date = date_parser.parse(updated_el.text)
+            # Strip timezone info for comparison with naive UTC datetimes
+            if entry_date.tzinfo is not None:
+                entry_date = entry_date.replace(tzinfo=None)
+            if entry_date < start_date:
+                continue
+        except (ValueError, TypeError):
+            continue
+
+        title_el = entry.find("atom:title", ns)
+        link_el = entry.find("atom:link", ns)
+        content_el = entry.find("atom:content", ns)
+
+        title = title_el.text.strip() if title_el is not None and title_el.text else "Untitled Advisory"
+        source_url = link_el.get("href", "") if link_el is not None else ""
+        raw_html = content_el.text if content_el is not None and content_el.text else ""
+
+        # --- Extract CVE IDs from the title ---
+        cve_matches = re.findall(r"CVE-\d{4}-\d{4,}", title, re.IGNORECASE)
+
+        # Use the first CVE as the entry ID; fall back to the alert/advisory code
+        if cve_matches:
+            entry_id = cve_matches[0].upper()
+        else:
+            # Try to extract an alert/advisory code like "AL26-005" or "AV25-722"
+            code_match = re.search(r"(A[LV]\d{2}-\d{3})", title)
+            entry_id = code_match.group(1) if code_match else f"CCCS-{abs(hash(title)) % 100000:05d}"
+
+        # --- Infer severity from the title text ---
+        title_lower = title.lower()
+        if "critical" in title_lower:
+            severity = "CRITICAL"
+        elif "high" in title_lower:
+            severity = "HIGH"
+        elif "medium" in title_lower or "moderate" in title_lower:
+            severity = "MEDIUM"
+        elif "low" in title_lower:
+            severity = "LOW"
+        else:
+            severity = "UNKNOWN"
+
+        # --- Parse plain-text description from HTML content ---
+        # Strip HTML tags and decode entities, then truncate to 500 chars
+        text_content = re.sub(r"<[^>]+>", " ", raw_html)
+        text_content = html_mod.unescape(text_content)
+        text_content = re.sub(r"\s+", " ", text_content).strip()
+        description = text_content[:500] if text_content else title
+
+        # --- Extract affected products from the title ---
+        # Pattern: "... impacting <product name> ..." or "... in <product name> ..."
+        affected_products: list[str] = []
+        product_match = re.search(r"(?:impacting|affecting|in)\s+(.+?)(?:\s*[-–—]\s*CVE|\s*$)", title, re.IGNORECASE)
+        if product_match:
+            affected_products = [product_match.group(1).strip()]
+
+        # --- Extract reference URLs from the HTML body ---
+        ref_urls = re.findall(r'href=["\']?(https?://[^\s"\'<>]+)', raw_html)
+        # Deduplicate while preserving order, cap at 5
+        seen: set[str] = set()
+        unique_refs: list[str] = []
+        for u in ref_urls:
+            if u not in seen:
+                seen.add(u)
+                unique_refs.append(u)
+                if len(unique_refs) >= 5:
+                    break
+
+        # --- Build remediation guidance ---
+        vuln_info = {
+            "severity": severity,
+            "cvss_score": None,
+            "cwe_ids": [],
+            "references": unique_refs,
+        }
+        remediation = generate_remediation(vuln_info, "CCCS")
+
+        vuln = Vulnerability(
+            id=entry_id,
+            title=title,
+            description=description,
+            severity=severity,
+            cvss_score=None,  # CCCS feed does not provide CVSS scores
+            published_date=_normalize_date(updated_el.text),
+            source="CCCS",
+            source_url=source_url,
+            affected_products=affected_products[:10],
+            remediation=remediation,
+            cwe_ids=[],  # CCCS feed does not provide CWE IDs
+            references=unique_refs,
+        )
+        vulnerabilities.append(vuln)
+
+    return vulnerabilities
+
+
 # ---------------------------------------------------------------------------
 # Background refresh logic
 # ---------------------------------------------------------------------------
@@ -769,6 +910,8 @@ async def refresh_single_source(source_name: str):
                 vulns = await fetch_github_advisories(REFRESH_DAYS, client)
             elif source_name == "CISA KEV":
                 vulns = await fetch_cisa_kev(REFRESH_DAYS, client)
+            elif source_name == "CCCS":
+                vulns = await fetch_cccs_alerts(REFRESH_DAYS, client)
             else:
                 raise ValueError(f"Unknown source: {source_name}")
 
@@ -786,7 +929,7 @@ async def refresh_single_source(source_name: str):
 
 async def refresh_all_sources():
     """
-    Refresh all three data sources concurrently.
+    Refresh all four data sources concurrently.
 
     Called by:
       - The APScheduler hourly job
@@ -808,6 +951,7 @@ async def refresh_all_sources():
             refresh_single_source("NVD"),
             refresh_single_source("GitHub Advisory"),
             refresh_single_source("CISA KEV"),
+            refresh_single_source("CCCS"),
             return_exceptions=True
         )
         print(f"[{datetime.utcnow().isoformat()}] Full data refresh complete")
@@ -863,9 +1007,9 @@ app = FastAPI(
     title="Vulnerability Aggregator API",
     description=(
         "Aggregates security vulnerabilities from NVD, GitHub Security Advisories, "
-        "and CISA KEV. Data is persisted in SQLite and refreshed hourly."
+        "CISA KEV, and CCCS. Data is persisted in SQLite and refreshed hourly."
     ),
-    version="2.0.0",
+    version="2.1.0",
     lifespan=lifespan
 )
 
@@ -1048,21 +1192,24 @@ async def trigger_refresh(request: RefreshRequest = RefreshRequest()):
     then 'ok' or 'error' when complete).
 
     Request body examples:
-      {}                          — refresh all three sources
+      {}                          — refresh all four sources
       {"source": "NVD"}           — NVD only
       {"source": "GitHub Advisory"} — GitHub only
       {"source": "CISA KEV"}      — CISA KEV only
+      {"source": "CCCS"}          — CCCS only
 
     Short aliases are also accepted (case-insensitive):
       "github" → "GitHub Advisory"
       "cisa"   → "CISA KEV"
       "nvd"    → "NVD"
+      "cccs"   → "CCCS"
     """
     # Resolve short aliases to canonical source names
     source_aliases = {
         "github": "GitHub Advisory",
         "cisa": "CISA KEV",
         "nvd": "NVD",
+        "cccs": "CCCS",
     }
 
     if request.source:

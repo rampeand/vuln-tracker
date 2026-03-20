@@ -328,7 +328,7 @@ function App() {
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <footer className="bg-gray-800 border-t border-gray-700 mt-12 py-6">
         <div className="max-w-7xl mx-auto px-4 text-center text-gray-400 text-sm">
-          <p>Data sources: NVD, GitHub Security Advisories, CISA KEV</p>
+          <p>Data sources: NVD, GitHub Security Advisories, CISA KEV, CCCS</p>
           <p className="mt-1">Database updated hourly · on-demand refresh available above</p>
         </div>
       </footer>

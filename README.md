@@ -35,7 +35,7 @@
 
 ## Overview
 
-**Vulnerability Tracker** aggregates security vulnerabilities from three authoritative public sources into a single, dark-themed dashboard. Stay ahead of threats with hourly data refreshes, severity-based filtering, and actionable remediation guidance.
+**Vulnerability Tracker** aggregates security vulnerabilities from four authoritative public sources into a single, dark-themed dashboard. Stay ahead of threats with hourly data refreshes, severity-based filtering, and actionable remediation guidance.
 
 ```
  ╔═══════════════════════════════════════════════════════════════════╗
@@ -72,7 +72,7 @@
 <td width="33%">
 
 ### Dashboard
-- Real-time aggregation from 3 feeds
+- Real-time aggregation from 4 feeds
 - Severity classification with color coding
 - Smart filtering by severity, source, time
 - Full-text search across IDs, titles, descriptions
@@ -105,19 +105,20 @@
 
 ```
                     ┌───────────────────────────────┐
-                    │     Vulnerability Tracker      │
-                    │         (refreshes hourly)     │
-                    └──────┬────────┬────────┬──────┘
-                           │        │        │
-              ┌────────────┘        │        └────────────┐
-              ▼                     ▼                     ▼
-   ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-   │    NVD (NIST)   │  │ GitHub Advisory │  │   CISA KEV      │
-   │─────────────────│  │─────────────────│  │─────────────────│
-   │ CVE data, CVSS  │  │ GHSA advisories │  │ Known exploited │
-   │ CWE, CPE, refs  │  │ ecosystem pkgs  │  │ vulnerabilities │
-   │ 5 req / 30s     │  │ 60 req / hr     │  │ static JSON     │
-   └─────────────────┘  └─────────────────┘  └─────────────────┘
+                    ┌─────────────────────────────────┐
+                    │      Vulnerability Tracker       │
+                    │          (refreshes hourly)      │
+                    └──┬─────────┬─────────┬─────────┬┘
+                       │         │         │         │
+          ┌────────────┘         │         │         └────────────┐
+          ▼                      ▼         ▼                      ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│    NVD (NIST)   │  │ GitHub Advisory │  │   CISA KEV      │  │  CCCS (Canada)  │
+│─────────────────│  │─────────────────│  │─────────────────│  │─────────────────│
+│ CVE data, CVSS  │  │ GHSA advisories │  │ Known exploited │  │ Alerts &        │
+│ CWE, CPE, refs  │  │ ecosystem pkgs  │  │ vulnerabilities │  │ advisories      │
+│ 5 req / 30s     │  │ 60 req / hr     │  │ static JSON     │  │ Atom XML feed   │
+└─────────────────┘  └─────────────────┘  └─────────────────┘  └─────────────────┘
 ```
 
 | Source | What it provides | Rate Limit |
@@ -125,6 +126,7 @@
 | **NVD** (NIST) | Comprehensive CVE data: CVSS scores, CWE IDs, CPE products, references | 5 req / 30 sec (no API key) |
 | **GitHub Security Advisories** | Package-level advisories across ecosystems (npm, PyPI, Maven, etc.) | 60 req / hr (unauthenticated) |
 | **CISA KEV** | Actively exploited vulnerabilities with federal remediation deadlines | No limit (static JSON file) |
+| **CCCS** (Canadian Centre for Cyber Security) | Government alerts & advisories with CVE references, severity hints | No limit (Atom feed) |
 
 ---
 
@@ -195,7 +197,7 @@ Returns a filtered, sorted list of vulnerabilities from the local database.
 |-----------|------|---------|-------------|
 | `days` | int | `2` | Look-back window (1 &ndash; 30) |
 | `severity` | string | &mdash; | `CRITICAL`, `HIGH`, `MEDIUM`, or `LOW` |
-| `source` | string | &mdash; | Substring match: `NVD`, `GitHub`, `CISA` |
+| `source` | string | &mdash; | Substring match: `NVD`, `GitHub`, `CISA`, `CCCS` |
 | `search` | string | &mdash; | Free-text across ID, title, description |
 
 <details>
@@ -220,7 +222,7 @@ Returns a filtered, sorted list of vulnerabilities from the local database.
     }
   ],
   "total_count": 125,
-  "sources_queried": ["NVD", "GitHub Advisory", "CISA KEV"],
+  "sources_queried": ["NVD", "GitHub Advisory", "CISA KEV", "CCCS"],
   "query_time": "2026-03-14T12:00:00",
   "days_range": 2
 }
@@ -325,7 +327,7 @@ vuln-tracker/
 | **Scheduler** | APScheduler 3.10 (hourly background refresh) |
 | **Database** | SQLite via aiosqlite, with 15-min in-memory TTL cache |
 | **Proxy** | Nginx stable-alpine (static files + API reverse proxy) |
-| **Data Sources** | NVD API 2.0, GitHub Advisory API, CISA KEV |
+| **Data Sources** | NVD API 2.0, GitHub Advisory API, CISA KEV, CCCS Alerts |
 | **CI/CD** | GitHub Actions &rarr; Docker Hub (`rampeand/vuln-tracker`) |
 
 ---

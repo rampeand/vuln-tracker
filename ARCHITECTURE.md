@@ -2,7 +2,7 @@
 
 ## Overview
 
-Vulnerability Tracker is a containerised, two-service application that aggregates CVE and advisory data from three public sources (NVD, GitHub Security Advisories, CISA KEV), stores it in a local SQLite database refreshed hourly, and serves it through a React single-page dashboard behind an Nginx reverse proxy.
+Vulnerability Tracker is a containerised, two-service application that aggregates CVE and advisory data from four public sources (NVD, GitHub Security Advisories, CISA KEV, CCCS), stores it in a local SQLite database refreshed hourly, and serves it through a React single-page dashboard behind an Nginx reverse proxy.
 
 ---
 
@@ -31,6 +31,7 @@ graph TB
         NVD["NVD API 2.0\nnvd.nist.gov"]
         GH["GitHub Advisories API\napi.github.com"]
         CISA["CISA KEV Feed\ncisa.gov"]
+        CCCS["CCCS Alerts Feed\ncyber.gc.ca"]
     end
 
     UI -->|"HTTP GET /api/*"| NGINX
@@ -45,9 +46,11 @@ graph TB
     SCHED -->|"Every hour\n(asyncio.gather)"| NVD
     SCHED -->|"Every hour"| GH
     SCHED -->|"Every hour"| CISA
+    SCHED -->|"Every hour"| CCCS
     NVD -->|"CVE JSON"| SCHED
     GH -->|"Advisory JSON"| SCHED
     CISA -->|"KEV JSON"| SCHED
+    CCCS -->|"Atom XML"| SCHED
     SCHED -->|"INSERT OR REPLACE"| DB
     SCHED -->|"cache.clear()"| CACHE
 ```
@@ -69,6 +72,7 @@ sequenceDiagram
     Scheduler->>NVD API: GET /rest/json/cves/2.0
     Scheduler->>GitHub API: GET /advisories
     Scheduler->>CISA: GET known_exploited_vulnerabilities.json
+    Scheduler->>CCCS: GET /api/cccs/rss/v1/get?feed=alerts_advisories
     Scheduler->>SQLite: INSERT OR REPLACE vulnerabilities
     Scheduler->>SQLite: UPDATE source_status (timestamp, count)
     Scheduler->>Cache: cache.clear()
@@ -152,7 +156,7 @@ erDiagram
         TEXT severity "CRITICAL / HIGH / MEDIUM / LOW / UNKNOWN"
         REAL cvss_score "nullable"
         TEXT published_date "ISO 8601"
-        TEXT source "NVD / GitHub Advisory / CISA KEV"
+        TEXT source "NVD / GitHub Advisory / CISA KEV / CCCS"
         TEXT source_url
         TEXT affected_products "JSON array"
         TEXT remediation
@@ -162,7 +166,7 @@ erDiagram
     }
 
     source_status {
-        TEXT source PK "NVD / GitHub Advisory / CISA KEV"
+        TEXT source PK "NVD / GitHub Advisory / CISA KEV / CCCS"
         TEXT last_updated "ISO 8601 of last successful fetch"
         TEXT status "pending / updating / ok / error"
         INTEGER count "records from this source in DB"
@@ -190,7 +194,7 @@ Query parameters for `/api/vulnerabilities`:
 |-------|------|---------|-------------|
 | `days` | int (1 &ndash; 30) | `2` | Look-back window |
 | `severity` | string | &mdash; | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` |
-| `source` | string | &mdash; | `NVD`, `GitHub`, `CISA` (substring match) |
+| `source` | string | &mdash; | `NVD`, `GitHub`, `CISA`, `CCCS` (substring match) |
 | `search` | string | &mdash; | Free-text search in ID, title, description |
 
 ---
@@ -202,6 +206,7 @@ Query parameters for `/api/vulnerabilities`:
 | **NVD** | `services.nvd.nist.gov/rest/json/cves/2.0` | CVE ID, CVSS (v3.1 &rarr; v3.0 &rarr; v2.0), CWE, CPE products, references | 5 req / 30 sec (no API key) |
 | **GitHub Advisories** | `api.github.com/advisories` | GHSA/CVE ID, package ecosystem, CVSS, severity | 60 req / hr (unauthenticated) |
 | **CISA KEV** | `cisa.gov/.../known_exploited_vulnerabilities.json` | CVE ID, vendor/product, required action, due date (always CRITICAL) | No limit (static JSON) |
+| **CCCS** | `cyber.gc.ca/api/cccs/rss/v1/get?feed=alerts_advisories` | Alert/advisory title, CVE IDs (from title), severity hint, HTML content | No limit (Atom feed) |
 
 ---
 
@@ -259,6 +264,7 @@ The frontend container's `nginx.conf` uses Docker's embedded DNS resolver (`127.
 | Scheduler | APScheduler | 3.10 |
 | Database | SQLite (aiosqlite) | stdlib + 0.20 |
 | HTTP client | HTTPX | 0.27 |
+| XML parsing | defusedxml | 0.7 |
 | Data validation | Pydantic | 2.9 |
 | Reverse proxy | Nginx | stable-alpine |
 | Containerisation | Docker + Compose | &mdash; |

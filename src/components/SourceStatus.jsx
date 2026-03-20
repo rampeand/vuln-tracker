@@ -10,7 +10,7 @@
  *   - Any error message from the last failed fetch
  *
  * Also shows:
- *   - A "Refresh All" button that triggers all three sources simultaneously
+ *   - A "Refresh All" button that triggers all four sources simultaneously
  *   - A countdown to the next scheduled hourly refresh
  *
  * Props:
@@ -20,7 +20,7 @@
  */
 function SourceStatus({ sourceStatus, nextRefresh, onRefresh }) {
   // Canonical source names — must match SOURCE_NAMES in backend/main.py
-  const sources = ['NVD', 'GitHub Advisory', 'CISA KEV']
+  const sources = ['NVD', 'GitHub Advisory', 'CISA KEV', 'CCCS']
 
   /**
    * Returns a Tailwind text-colour class for a given status string.
@@ -114,8 +114,8 @@ function SourceStatus({ sourceStatus, nextRefresh, onRefresh }) {
         </div>
       </div>
 
-      {/* Per-source cards grid — 1 column on mobile, 3 on md+ screens */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      {/* Per-source cards grid — 1 column on mobile, 2 on md, 4 on lg+ screens */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         {sources.map((source) => {
           const info = sourceStatus?.[source] || {}
           const isUpdating = info.status === 'updating'
