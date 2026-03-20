@@ -22,23 +22,35 @@ jobs:
       
       - name: Wait for services to be healthy
         run: |
-          # Simple check to wait for backend health
-          for i in {1..10}; do
+          # Wait for backend health endpoint to respond
+          echo "Waiting for backend..."
+          for i in {1..30}; do
             if curl -s http://localhost:8000/health | grep -q "healthy"; then
               echo "Backend is healthy!"
               break
             fi
-            echo "Waiting for backend..."
+            if [ "$i" -eq 30 ]; then
+              echo "Backend failed to become healthy"
+              docker compose logs backend
+              exit 1
+            fi
             sleep 5
           done
-          
-          # Check frontend is serving something
-          if curl -s http://localhost:3000 | grep -q "<html"; then
-            echo "Frontend is serving HTML!"
-          else
-            echo "Frontend failed to serve content"
-            exit 1
-          fi
+
+          # Wait for frontend (depends on backend being Docker-healthy, may lag)
+          echo "Waiting for frontend..."
+          for i in {1..20}; do
+            if curl -s http://localhost:3000 | grep -q "<html"; then
+              echo "Frontend is serving HTML!"
+              break
+            fi
+            if [ "$i" -eq 20 ]; then
+              echo "Frontend failed to serve content"
+              docker compose logs frontend
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Clean up temporary containers
         run: docker compose down
